@@ -51,45 +51,82 @@ BASHRC="${STUDENT_HOME}/.bashrc"
 INSTALLER_BIN_NAME="FPGAs_AdaptiveSoCs_Unified_SDI_${XILINX_VERSION}_1114_2157_Lin64.bin"
 INSTALLER_BIN="${SYSADMIN_HOME}/Downloads/${INSTALLER_BIN_NAME}"
 
+# Known tool directory names the Xilinx installer creates
+XILINX_TOOL_DIRS=("Vivado" "Vitis" "Model_Composer" "PDM" "Vitis_HLS" "DocNav")
+
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 1 : Detect and run the Xilinx installer
+# PRE-CHECK : Scan all possible locations for an existing installation
+#
+#  Checks (in order):
+#   1. /opt/Xilinx/2025.2/          ← correct final location
+#   2. /opt/2025.2/                 ← versioned dir dumped directly under /opt
+#   3. /opt/Vivado, /opt/Vitis …   ← tool dirs dumped loose under /opt
+#
+#  If anything is found, skip the installer entirely and go straight to the
+#  path-correction step which will move things into place if needed.
+# ─────────────────────────────────────────────────────────────────────────────
+section "PRE-CHECK: Scanning for Existing Xilinx Installation"
+
+ALREADY_INSTALLED=false
+
+if [[ -d "${XILINX_VER_ROOT}" ]]; then
+    info "Found existing installation at: ${XILINX_VER_ROOT}"
+    ALREADY_INSTALLED=true
+
+elif [[ -d "/opt/${XILINX_VERSION}" ]]; then
+    info "Found existing installation at: /opt/${XILINX_VERSION} (needs relocation)"
+    ALREADY_INSTALLED=true
+
+else
+    for tool in "${XILINX_TOOL_DIRS[@]}"; do
+        if [[ -d "/opt/${tool}" ]]; then
+            info "Found existing tool directory: /opt/${tool} (needs relocation)"
+            ALREADY_INSTALLED=true
+            break
+        fi
+    done
+fi
+
+if [[ "$ALREADY_INSTALLED" == true ]]; then
+    warn "Existing installation detected — skipping installer. Proceeding to path verification."
+else
+    info "No existing installation found — installer will be launched."
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 1 : Run installer  (skipped if installation already exists)
 #
 #  Two supported installer types, checked in this order:
+#   A) Explicit path argument    →  sudo bash post-install-xilinx.sh /path/to/file
+#   B) Online/unified .bin       →  ~/Downloads/FPGAs_AdaptiveSoCs_...Lin64.bin
+#   C) Offline installer xsetup  →  ~/Documents/FPGA.../xsetup
 #
-#  A) Online/unified .bin  →  ~/Downloads/FPGAs_AdaptiveSoCs_...Lin64.bin
-#  B) Offline installer    →  ~/Documents/FPGA.../xsetup
-#
-#  Both must be launched as root (which sudo already provides).
-#  Pass an explicit path as the first argument to override auto-detection:
-#    sudo bash post-install-xilinx.sh /path/to/installer.bin
-#    sudo bash post-install-xilinx.sh /path/to/xsetup
+#  Both installer types must be launched as root (sudo already provides this).
 # ─────────────────────────────────────────────────────────────────────────────
-section "STEP 1: Detecting and Running Xilinx Installer"
+section "STEP 1: Xilinx Installer"
 
-if [[ -d "${XILINX_VER_ROOT}/Vivado" ]]; then
-    warn "Vivado ${XILINX_VERSION} already found at ${XILINX_VER_ROOT} — skipping installer."
+if [[ "$ALREADY_INSTALLED" == true ]]; then
+    info "Skipping installer — existing installation was detected in pre-check."
 else
     INSTALLER_TO_RUN=""
     INSTALLER_TYPE=""
 
-    # ── If an explicit path was passed as argument, use it directly ──────────
+    # ── A) Explicit path passed as argument ──────────────────────────────────
     if [[ -n "${1:-}" ]]; then
-        if [[ ! -f "$1" ]]; then
-            error "Specified installer not found: $1"
-        fi
+        [[ ! -f "$1" ]] && error "Specified installer not found: $1"
         INSTALLER_TO_RUN="$1"
         [[ "$1" == *xsetup* ]] && INSTALLER_TYPE="xsetup" || INSTALLER_TYPE="bin"
         info "Using explicitly specified installer: ${INSTALLER_TO_RUN}"
 
-    # ── Auto-detect: try .bin in Downloads first ─────────────────────────────
+    # ── B) Auto-detect: .bin in sysadmin's Downloads ─────────────────────────
     elif [[ -f "${INSTALLER_BIN}" ]]; then
         INSTALLER_TO_RUN="${INSTALLER_BIN}"
         INSTALLER_TYPE="bin"
         info "Found .bin installer: ${INSTALLER_TO_RUN}"
 
-    # ── Auto-detect: search for xsetup under ~/Documents/FPGA*/ ─────────────
+    # ── C) Auto-detect: offline xsetup under ~/Documents/FPGA*/ ─────────────
     else
-        info ".bin installer not found in Downloads — searching for offline xsetup in Documents ..."
+        info ".bin not found in Downloads — searching for offline xsetup in Documents ..."
         XSETUP_FOUND=$(find "${SYSADMIN_HOME}/Documents" -maxdepth 3 \
             -iname "xsetup" -type f 2>/dev/null | head -n 1)
 
@@ -107,55 +144,49 @@ else
         fi
     fi
 
-    # ── Launch the installer ──────────────────────────────────────────────────
+    # ── Launch ────────────────────────────────────────────────────────────────
     chmod 755 "${INSTALLER_TO_RUN}"
 
     if [[ "$INSTALLER_TYPE" == "xsetup" ]]; then
-        info "Launching offline installer (xsetup) — running as root for /opt write access."
-        info "Install to: ${XILINX_ROOT}"
+        info "Launching offline installer (xsetup) as root — installing to ${XILINX_ROOT}"
         info "(The installer GUI will open — follow the on-screen wizard.)"
-        # xsetup must be run from its own directory
         cd "$(dirname "${INSTALLER_TO_RUN}")"
         ./xsetup
         cd - > /dev/null
     else
-        info "Launching .bin installer — running as root for /opt write access."
-        info "Install to: ${XILINX_ROOT}"
+        info "Launching .bin installer as root — installing to ${XILINX_ROOT}"
         info "(The installer GUI will open — follow the on-screen wizard.)"
         "${INSTALLER_TO_RUN}"
     fi
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 2 : Verify install path — move to /opt/Xilinx if needed
+# STEP 2 : Verify install path — move to /opt/Xilinx/VERSION if needed
 #
 #  The Xilinx installer sometimes places tool folders directly under /opt/
 #  instead of /opt/Xilinx/. This step detects that and corrects it.
 # ─────────────────────────────────────────────────────────────────────────────
 section "STEP 2: Verifying Installation Path"
 
-# Known top-level directory names the Xilinx installer creates
-XILINX_TOOL_DIRS=("Vivado" "Vitis" "Model_Composer" "PDM" "Vitis_HLS" "DocNav")
-
 if [[ -d "${XILINX_VER_ROOT}" ]]; then
     info "Install already at correct location: ${XILINX_VER_ROOT}"
 else
-    info "Expected path ${XILINX_VER_ROOT} not found — checking if tools landed directly under /opt/ ..."
+    info "${XILINX_VER_ROOT} not found — checking alternate locations under /opt/ ..."
 
-    # Look for a versioned directory directly under /opt (e.g. /opt/2025.2)
+    # ── Versioned directory directly under /opt (e.g. /opt/2025.2) ──────────
     if [[ -d "/opt/${XILINX_VERSION}" ]]; then
-        info "Found /opt/${XILINX_VERSION} — moving into ${XILINX_ROOT}/"
+        info "Found /opt/${XILINX_VERSION} — relocating to ${XILINX_ROOT}/"
         mkdir -p "${XILINX_ROOT}"
         mv "/opt/${XILINX_VERSION}" "${XILINX_VER_ROOT}"
         info "Moved: /opt/${XILINX_VERSION} → ${XILINX_VER_ROOT}"
 
     else
-        # Tools may be scattered as /opt/Vivado, /opt/Vitis, etc.
+        # ── Individual tool dirs loose under /opt (e.g. /opt/Vivado) ─────────
         FOUND_ANY=false
         for tool in "${XILINX_TOOL_DIRS[@]}"; do
             if [[ -d "/opt/${tool}" ]]; then
                 FOUND_ANY=true
-                info "Found /opt/${tool} — moving into ${XILINX_VER_ROOT}/"
+                info "Found /opt/${tool} — relocating to ${XILINX_VER_ROOT}/"
                 mkdir -p "${XILINX_VER_ROOT}"
                 mv "/opt/${tool}" "${XILINX_VER_ROOT}/${tool}"
                 info "Moved: /opt/${tool} → ${XILINX_VER_ROOT}/${tool}"
