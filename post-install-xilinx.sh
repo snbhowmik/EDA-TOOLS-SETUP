@@ -205,67 +205,72 @@ info "Final layout under ${XILINX_ROOT}/:"
 ls "${XILINX_ROOT}/"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 3 : Patch settings64.sh — fix all hardcoded paths
+# STEP 3 : Patch all settings64.sh files — fix every hardcoded path
 #
-#  After relocation, any path baked into settings64.sh that points to the
-#  old install location is broken. We patch two possible wrong prefixes:
+#  Each settings64.sh sources several hidden .settings64-*.sh files using
+#  absolute paths baked in at install time. Because the installer ran to /opt/
+#  instead of /opt/Xilinx/, every one of these source lines is broken:
 #
-#   /opt/2025.2   → /opt/Xilinx/2025.2   (installer ran to /opt directly)
-#   /tools/Xilinx → /opt/Xilinx          (Xilinx's default build-time path)
+#    source /opt/2025.2/Vivado/.settings64-Vivado.sh     ← wrong
+#    source /opt/DocNav/.settings64-DocNav.sh             ← wrong
+#    source /opt/xic/...                                  ← wrong
 #
-#  The file is shown before and after so you can verify the changes.
+#  We fix all three prefixes in every settings file:
+#    /opt/2025.2  →  /opt/Xilinx/2025.2
+#    /opt/DocNav  →  /opt/Xilinx/DocNav
+#    /opt/xic     →  /opt/Xilinx/xic
+#  Plus the build-time default just in case:
+#    /tools/Xilinx  →  /opt/Xilinx
 # ─────────────────────────────────────────────────────────────────────────────
 section "STEP 3: Patching settings64.sh Files"
 
-SETTINGS_FILES=(
-    "${XILINX_VER_ROOT}/Vivado/settings64.sh"
-    "${XILINX_VER_ROOT}/Vitis/settings64.sh"
-    "${XILINX_VER_ROOT}/Model_Composer/settings64.sh"
-    "${XILINX_VER_ROOT}/PDM/settings64.sh"
-)
+# Collect every settings64.sh under the version root (catches all tools)
+mapfile -t SETTINGS_FILES < <(find "${XILINX_VER_ROOT}" -name "settings64.sh" -type f 2>/dev/null)
 
-for f in "${SETTINGS_FILES[@]}"; do
-    if [[ ! -f "$f" ]]; then
-        warn "Not found (tool may not be installed): $f — skipping."
-        continue
-    fi
+if [[ ${#SETTINGS_FILES[@]} -eq 0 ]]; then
+    warn "No settings64.sh files found under ${XILINX_VER_ROOT} — skipping patch step."
+else
+    for f in "${SETTINGS_FILES[@]}"; do
+        info "Patching: $f"
+        CHANGED=false
 
-    info "Patching: $f"
-    CHANGED=false
+        # /opt/VERSION  →  /opt/Xilinx/VERSION  (main tool paths)
+        if grep -q "/opt/${XILINX_VERSION}" "$f"; then
+            sed -i "s|/opt/${XILINX_VERSION}|${XILINX_VER_ROOT}|g" "$f"
+            info "  /opt/${XILINX_VERSION} → ${XILINX_VER_ROOT}"
+            CHANGED=true
+        fi
 
-    # ── Replace /opt/VERSION with /opt/Xilinx/VERSION ────────────────────────
-    # This is the path baked in when the installer ran to /opt/ instead of /opt/Xilinx/
-    if grep -q "/opt/${XILINX_VERSION}" "$f"; then
-        sed -i "s|/opt/${XILINX_VERSION}|${XILINX_VER_ROOT}|g" "$f"
-        info "  Replaced: /opt/${XILINX_VERSION} → ${XILINX_VER_ROOT}"
-        CHANGED=true
-    fi
+        # /opt/DocNav  →  /opt/Xilinx/DocNav
+        if grep -q "/opt/DocNav" "$f"; then
+            sed -i "s|/opt/DocNav|${XILINX_ROOT}/DocNav|g" "$f"
+            info "  /opt/DocNav → ${XILINX_ROOT}/DocNav"
+            CHANGED=true
+        fi
 
-    # ── Replace /tools/Xilinx with /opt/Xilinx ───────────────────────────────
-    # This is Xilinx's own build-time default that sometimes survives into release
-    if grep -q "/tools/Xilinx" "$f"; then
-        sed -i 's|/tools/Xilinx|/opt/Xilinx|g' "$f"
-        info "  Replaced: /tools/Xilinx → /opt/Xilinx"
-        CHANGED=true
-    fi
+        # /opt/xic  →  /opt/Xilinx/xic
+        if grep -q "/opt/xic" "$f"; then
+            sed -i "s|/opt/xic|${XILINX_ROOT}/xic|g" "$f"
+            info "  /opt/xic → ${XILINX_ROOT}/xic"
+            CHANGED=true
+        fi
 
-    # ── Any other non-/opt/Xilinx absolute path referencing the version ───────
-    # Catches edge cases like /home/user/Xilinx/... or custom installer prefixes
-    OTHER_WRONG=$(grep -oP '["\s]/[^"\s]*'"${XILINX_VERSION}"'[^"\s]*' "$f" \
-        | grep -v "/opt/Xilinx" | head -n 3 || true)
-    if [[ -n "$OTHER_WRONG" ]]; then
-        warn "  Unexpected path references found in $f — review manually:"
-        echo "$OTHER_WRONG" | while read -r line; do warn "    $line"; done
-    fi
+        # /tools/Xilinx  →  /opt/Xilinx  (Xilinx build-time default fallback)
+        if grep -q "/tools/Xilinx" "$f"; then
+            sed -i 's|/tools/Xilinx|/opt/Xilinx|g' "$f"
+            info "  /tools/Xilinx → /opt/Xilinx"
+            CHANGED=true
+        fi
 
-    if [[ "$CHANGED" == false ]]; then
-        info "  No path changes needed — already correct or uses a different scheme."
-    fi
+        [[ "$CHANGED" == false ]] && info "  Already correct — no changes needed."
 
-    # ── Show current XILINX_DIR line so you can verify ───────────────────────
-    XILINX_DIR_LINE=$(grep -m1 "XILINX" "$f" 2>/dev/null || echo "  (no XILINX variable found)")
-    info "  Verify → ${XILINX_DIR_LINE}"
-done
+        # Print all source lines so you can verify at a glance
+        info "  Source lines after patch:"
+        grep "^source" "$f" 2>/dev/null | while read -r line; do
+            info "    $line"
+        done
+    done
+fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 4 : Write .bashrc entries for the student user
@@ -316,27 +321,87 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 5 : Copy .desktop shortcuts from root's Desktop → student's Desktop
+# STEP 5 : Install .desktop shortcuts
+#
+#  Two destinations are required on RHEL 8 / GNOME:
+#   A) /usr/share/applications/   ← makes tools appear in the GNOME app menu
+#   B) ~/Desktop/                 ← puts clickable icons on student's desktop
+#
+#  Source: /root/Desktop/*.desktop  (created by the Xilinx installer)
+#
+#  The .desktop files also contain hardcoded /opt/VERSION paths in their
+#  Exec= and Icon= lines — those are patched here too.
 # ─────────────────────────────────────────────────────────────────────────────
-section "STEP 5: Installing .desktop Shortcuts for Student"
+section "STEP 5: Installing .desktop Shortcuts"
 
 ROOT_DESKTOP="/root/Desktop"
 STUDENT_DESKTOP="${STUDENT_HOME}/Desktop"
+SYSTEM_APPS="/usr/share/applications"
 
-# Ensure the student's Desktop directory exists
 mkdir -p "$STUDENT_DESKTOP"
 chown "${STUDENT_USER}:${STUDENT_USER}" "$STUDENT_DESKTOP"
 
-if compgen -G "${ROOT_DESKTOP}/*.desktop" > /dev/null 2>&1; then
-    cp "${ROOT_DESKTOP}"/*.desktop "$STUDENT_DESKTOP/"
-    chown "${STUDENT_USER}:${STUDENT_USER}" "${STUDENT_DESKTOP}"/*.desktop
-    chmod 755 "${STUDENT_DESKTOP}"/*.desktop
-    DESKTOP_COUNT=$(ls "${ROOT_DESKTOP}"/*.desktop 2>/dev/null | wc -l)
-    info "Copied ${DESKTOP_COUNT} .desktop file(s): /root/Desktop → ${STUDENT_DESKTOP}"
+if ! compgen -G "${ROOT_DESKTOP}/*.desktop" > /dev/null 2>&1; then
+    warn "No .desktop files found in /root/Desktop."
+    warn "The installer may have placed them elsewhere. Check:"
+    warn "  find /root -name '*.desktop' 2>/dev/null"
+    warn "  find ${XILINX_VER_ROOT} -name '*.desktop' 2>/dev/null"
 else
-    warn "No .desktop files found in /root/Desktop — skipping."
-    warn "If the installer created shortcuts elsewhere, copy them manually to:"
-    warn "  ${STUDENT_DESKTOP}"
+    DESKTOP_COUNT=0
+
+    for src in "${ROOT_DESKTOP}"/*.desktop; do
+        fname="$(basename "$src")"
+
+        # ── Patch Exec= and Icon= paths in each .desktop file ────────────────
+        # The installer bakes /opt/VERSION into these lines; fix them in place
+        # before copying so both destinations get the corrected version.
+
+        if grep -q "/opt/${XILINX_VERSION}" "$src"; then
+            sed -i "s|/opt/${XILINX_VERSION}|${XILINX_VER_ROOT}|g" "$src"
+            info "Patched Exec/Icon paths in: $fname"
+        fi
+        if grep -q "/opt/DocNav" "$src"; then
+            sed -i "s|/opt/DocNav|${XILINX_ROOT}/DocNav|g" "$src"
+        fi
+        if grep -q "/opt/xic" "$src"; then
+            sed -i "s|/opt/xic|${XILINX_ROOT}/xic|g" "$src"
+        fi
+
+        # ── A) Copy to /usr/share/applications/ (GNOME app menu) ─────────────
+        cp "$src" "${SYSTEM_APPS}/${fname}"
+        chmod 644 "${SYSTEM_APPS}/${fname}"
+        info "Installed to app menu: ${SYSTEM_APPS}/${fname}"
+
+        # ── B) Copy to student's Desktop ──────────────────────────────────────
+        cp "$src" "${STUDENT_DESKTOP}/${fname}"
+        chown "${STUDENT_USER}:${STUDENT_USER}" "${STUDENT_DESKTOP}/${fname}"
+        # Mark as trusted so GNOME shows it as a launcher, not a text file
+        chmod 755 "${STUDENT_DESKTOP}/${fname}"
+
+        DESKTOP_COUNT=$(( DESKTOP_COUNT + 1 ))
+    done
+
+    info "Installed ${DESKTOP_COUNT} shortcut(s) to app menu and student Desktop."
+
+    # ── Rebuild GNOME app menu database ───────────────────────────────────────
+    if command -v update-desktop-database &>/dev/null; then
+        update-desktop-database "${SYSTEM_APPS}"
+        info "GNOME app menu database updated."
+    else
+        warn "update-desktop-database not found — install desktop-file-utils if apps don't appear."
+    fi
+
+    # ── Mark student's desktop icons as trusted (RHEL 8 GNOME requirement) ───
+    # Without this, GNOME shows a shield icon and won't launch the app on click.
+    if command -v gio &>/dev/null; then
+        for f in "${STUDENT_DESKTOP}"/*.desktop; do
+            gio set "$f" metadata::trusted true 2>/dev/null && \
+                info "Marked trusted: $(basename "$f")" || true
+        done
+    else
+        warn "gio not available — desktop icons may show as untrusted."
+        warn "Student can right-click each icon and choose 'Allow Launching'."
+    fi
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -362,10 +427,15 @@ section "XILINX POST-INSTALL COMPLETE"
 echo -e "  Install path   : ${XILINX_VER_ROOT}"
 echo -e "  Student env    : ${BASHRC}"
 echo -e "  Student Desktop: ${STUDENT_DESKTOP}"
+echo -e "  App menu       : ${SYSTEM_APPS}"
 echo ""
 echo -e "  ${YELLOW}To activate the environment now, run as ${STUDENT_USER}:${NC}"
 echo -e "    source ~/.bashrc"
 echo ""
 echo -e "  ${YELLOW}Verify Vivado:${NC}"
 echo -e "    vivado -version"
+echo ""
+echo -e "  ${YELLOW}If apps still don't appear in GNOME menu:${NC}"
+echo -e "    sudo update-desktop-database /usr/share/applications"
+echo -e "    Log out and back in as ${STUDENT_USER}"
 echo ""
