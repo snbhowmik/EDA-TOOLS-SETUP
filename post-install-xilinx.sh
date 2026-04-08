@@ -51,19 +51,19 @@ BASHRC="${STUDENT_HOME}/.bashrc"
 INSTALLER_BIN_NAME="FPGAs_AdaptiveSoCs_Unified_SDI_${XILINX_VERSION}_1114_2157_Lin64.bin"
 INSTALLER_BIN="${SYSADMIN_HOME}/Downloads/${INSTALLER_BIN_NAME}"
 
-# Known tool directory names the Xilinx installer creates
-XILINX_TOOL_DIRS=("Vivado" "Vitis" "Model_Composer" "PDM" "Vitis_HLS" "DocNav")
+# Exact directory names Xilinx 2025.x creates directly under the install root
+# (confirmed from actual installation output)
+XILINX_INSTALLER_DIRS=("${XILINX_VERSION}" "DocNav" "xic" ".xinstall")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PRE-CHECK : Scan all possible locations for an existing installation
 #
 #  Checks (in order):
-#   1. /opt/Xilinx/2025.2/          ← correct final location
-#   2. /opt/2025.2/                 ← versioned dir dumped directly under /opt
-#   3. /opt/Vivado, /opt/Vitis …   ← tool dirs dumped loose under /opt
+#   1. /opt/Xilinx/2025.2/   ← correct final location
+#   2. /opt/2025.2/           ← installer dumped version dir directly under /opt
+#   3. /opt/DocNav, /opt/xic  ← other installer-created dirs loose under /opt
 #
-#  If anything is found, skip the installer entirely and go straight to the
-#  path-correction step which will move things into place if needed.
+#  If anything is found, skip the installer and go straight to path correction.
 # ─────────────────────────────────────────────────────────────────────────────
 section "PRE-CHECK: Scanning for Existing Xilinx Installation"
 
@@ -72,23 +72,16 @@ ALREADY_INSTALLED=false
 if [[ -d "${XILINX_VER_ROOT}" ]]; then
     info "Found existing installation at: ${XILINX_VER_ROOT}"
     ALREADY_INSTALLED=true
-
 elif [[ -d "/opt/${XILINX_VERSION}" ]]; then
     info "Found existing installation at: /opt/${XILINX_VERSION} (needs relocation)"
     ALREADY_INSTALLED=true
-
-else
-    for tool in "${XILINX_TOOL_DIRS[@]}"; do
-        if [[ -d "/opt/${tool}" ]]; then
-            info "Found existing tool directory: /opt/${tool} (needs relocation)"
-            ALREADY_INSTALLED=true
-            break
-        fi
-    done
+elif [[ -d "/opt/DocNav" ]] || [[ -d "/opt/xic" ]]; then
+    info "Found Xilinx tool directories under /opt/ (needs relocation)"
+    ALREADY_INSTALLED=true
 fi
 
 if [[ "$ALREADY_INSTALLED" == true ]]; then
-    warn "Existing installation detected — skipping installer. Proceeding to path verification."
+    warn "Existing installation detected — skipping installer. Proceeding to path correction."
 else
     info "No existing installation found — installer will be launched."
 fi
@@ -161,51 +154,68 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 2 : Verify install path — move to /opt/Xilinx/VERSION if needed
+# STEP 2 : Relocate install directories into /opt/Xilinx/ if needed
 #
-#  The Xilinx installer sometimes places tool folders directly under /opt/
-#  instead of /opt/Xilinx/. This step detects that and corrects it.
+#  The Xilinx installer creates these under whatever root it ran as:
+#    2025.2/       ← versioned dir (contains Vivado, Vitis, etc.)
+#    DocNav/       ← documentation browser
+#    xic/          ← Xilinx information centre
+#    .xinstall/    ← installer metadata
+#
+#  All of these need to end up under /opt/Xilinx/.
+#  OLD_INSTALL_PREFIX tracks where they came from, used in Step 3 to fix paths.
 # ─────────────────────────────────────────────────────────────────────────────
-section "STEP 2: Verifying Installation Path"
+section "STEP 2: Relocating to /opt/Xilinx/"
+
+OLD_INSTALL_PREFIX=""   # will be set below if a move is needed
 
 if [[ -d "${XILINX_VER_ROOT}" ]]; then
-    info "Install already at correct location: ${XILINX_VER_ROOT}"
+    info "Version directory already at correct location: ${XILINX_VER_ROOT}"
+    # Still move companion dirs if they're loose under /opt
+    OLD_INSTALL_PREFIX="/opt"
 else
-    info "${XILINX_VER_ROOT} not found — checking alternate locations under /opt/ ..."
+    info "${XILINX_VER_ROOT} not present — checking /opt/ for installer output ..."
 
-    # ── Versioned directory directly under /opt (e.g. /opt/2025.2) ──────────
     if [[ -d "/opt/${XILINX_VERSION}" ]]; then
-        info "Found /opt/${XILINX_VERSION} — relocating to ${XILINX_ROOT}/"
+        OLD_INSTALL_PREFIX="/opt"
         mkdir -p "${XILINX_ROOT}"
+
+        # Move the versioned dir (e.g. 2025.2 → /opt/Xilinx/2025.2)
+        info "Moving /opt/${XILINX_VERSION} → ${XILINX_VER_ROOT}"
         mv "/opt/${XILINX_VERSION}" "${XILINX_VER_ROOT}"
-        info "Moved: /opt/${XILINX_VERSION} → ${XILINX_VER_ROOT}"
-
     else
-        # ── Individual tool dirs loose under /opt (e.g. /opt/Vivado) ─────────
-        FOUND_ANY=false
-        for tool in "${XILINX_TOOL_DIRS[@]}"; do
-            if [[ -d "/opt/${tool}" ]]; then
-                FOUND_ANY=true
-                info "Found /opt/${tool} — relocating to ${XILINX_VER_ROOT}/"
-                mkdir -p "${XILINX_VER_ROOT}"
-                mv "/opt/${tool}" "${XILINX_VER_ROOT}/${tool}"
-                info "Moved: /opt/${tool} → ${XILINX_VER_ROOT}/${tool}"
-            fi
-        done
-
-        if [[ "$FOUND_ANY" == false ]]; then
-            error "Cannot find Xilinx tools under /opt/ or /opt/Xilinx/.\n  Please verify the installer ran successfully and check /opt/ manually."
-        fi
+        error "Cannot find /opt/${XILINX_VERSION} or ${XILINX_VER_ROOT}.\n  Verify the installer completed successfully, then check /opt/ manually."
     fi
-
-    info "Final install location: ${XILINX_VER_ROOT}"
-    ls "${XILINX_VER_ROOT}/"
 fi
 
+# Move companion directories (DocNav, xic, .xinstall) if still under /opt/
+mkdir -p "${XILINX_ROOT}"
+for dir in "DocNav" "xic" ".xinstall"; do
+    if [[ -d "/opt/${dir}" ]]; then
+        info "Moving /opt/${dir} → ${XILINX_ROOT}/${dir}"
+        mv "/opt/${dir}" "${XILINX_ROOT}/${dir}"
+    elif [[ -d "${XILINX_ROOT}/${dir}" ]]; then
+        info "${dir} already under ${XILINX_ROOT}/ — OK"
+    else
+        warn "${dir} not found under /opt/ or ${XILINX_ROOT}/ — skipping."
+    fi
+done
+
+info "Final layout under ${XILINX_ROOT}/:"
+ls "${XILINX_ROOT}/"
+
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 3 : Fix settings64.sh paths  (/tools/Xilinx → /opt/Xilinx)
+# STEP 3 : Patch settings64.sh — fix all hardcoded paths
+#
+#  After relocation, any path baked into settings64.sh that points to the
+#  old install location is broken. We patch two possible wrong prefixes:
+#
+#   /opt/2025.2   → /opt/Xilinx/2025.2   (installer ran to /opt directly)
+#   /tools/Xilinx → /opt/Xilinx          (Xilinx's default build-time path)
+#
+#  The file is shown before and after so you can verify the changes.
 # ─────────────────────────────────────────────────────────────────────────────
-section "STEP 3: Fixing settings64.sh Paths"
+section "STEP 3: Patching settings64.sh Files"
 
 SETTINGS_FILES=(
     "${XILINX_VER_ROOT}/Vivado/settings64.sh"
@@ -215,16 +225,46 @@ SETTINGS_FILES=(
 )
 
 for f in "${SETTINGS_FILES[@]}"; do
-    if [[ -f "$f" ]]; then
-        if grep -q "/tools/Xilinx" "$f"; then
-            sed -i 's|/tools/Xilinx|/opt/Xilinx|g' "$f"
-            info "Patched: $f"
-        else
-            warn "No /tools/Xilinx reference in $f — already correct or different path."
-        fi
-    else
-        warn "File not found (tool may not be installed): $f"
+    if [[ ! -f "$f" ]]; then
+        warn "Not found (tool may not be installed): $f — skipping."
+        continue
     fi
+
+    info "Patching: $f"
+    CHANGED=false
+
+    # ── Replace /opt/VERSION with /opt/Xilinx/VERSION ────────────────────────
+    # This is the path baked in when the installer ran to /opt/ instead of /opt/Xilinx/
+    if grep -q "/opt/${XILINX_VERSION}" "$f"; then
+        sed -i "s|/opt/${XILINX_VERSION}|${XILINX_VER_ROOT}|g" "$f"
+        info "  Replaced: /opt/${XILINX_VERSION} → ${XILINX_VER_ROOT}"
+        CHANGED=true
+    fi
+
+    # ── Replace /tools/Xilinx with /opt/Xilinx ───────────────────────────────
+    # This is Xilinx's own build-time default that sometimes survives into release
+    if grep -q "/tools/Xilinx" "$f"; then
+        sed -i 's|/tools/Xilinx|/opt/Xilinx|g' "$f"
+        info "  Replaced: /tools/Xilinx → /opt/Xilinx"
+        CHANGED=true
+    fi
+
+    # ── Any other non-/opt/Xilinx absolute path referencing the version ───────
+    # Catches edge cases like /home/user/Xilinx/... or custom installer prefixes
+    OTHER_WRONG=$(grep -oP '["\s]/[^"\s]*'"${XILINX_VERSION}"'[^"\s]*' "$f" \
+        | grep -v "/opt/Xilinx" | head -n 3 || true)
+    if [[ -n "$OTHER_WRONG" ]]; then
+        warn "  Unexpected path references found in $f — review manually:"
+        echo "$OTHER_WRONG" | while read -r line; do warn "    $line"; done
+    fi
+
+    if [[ "$CHANGED" == false ]]; then
+        info "  No path changes needed — already correct or uses a different scheme."
+    fi
+
+    # ── Show current XILINX_DIR line so you can verify ───────────────────────
+    XILINX_DIR_LINE=$(grep -m1 "XILINX" "$f" 2>/dev/null || echo "  (no XILINX variable found)")
+    info "  Verify → ${XILINX_DIR_LINE}"
 done
 
 # ─────────────────────────────────────────────────────────────────────────────
