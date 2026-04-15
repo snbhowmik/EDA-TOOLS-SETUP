@@ -89,18 +89,41 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 1 : Run installer  (skipped if installation already exists)
 #
-#  Two supported installer types, checked in this order:
+#  ⚠️  CRITICAL — WHEN THE INSTALLER GUI OPENS:
+#       Set the installation directory to exactly:
+#
+#            /opt/Xilinx
+#
+#       NOT /opt  (this causes internal classpath corruption)
+#       NOT /home/...  (tools will not be accessible system-wide)
+#
+#  Vivado is NOT relocatable after install. Paths are baked into internal
+#  JVM configs, JAR references, and TCL scripts. Installing to the wrong
+#  location and moving afterwards will break the tool.
+#
+#  Two supported installer types (auto-detected in order):
 #   A) Explicit path argument    →  sudo bash post-install-xilinx.sh /path/to/file
 #   B) Online/unified .bin       →  ~/Downloads/FPGAs_AdaptiveSoCs_...Lin64.bin
 #   C) Offline installer xsetup  →  ~/Documents/FPGA.../xsetup
-#
-#  Both installer types must be launched as root (sudo already provides this).
 # ─────────────────────────────────────────────────────────────────────────────
 section "STEP 1: Xilinx Installer"
 
 if [[ "$ALREADY_INSTALLED" == true ]]; then
     info "Skipping installer — existing installation was detected in pre-check."
 else
+    echo -e "\n${RED}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${RED}  ⚠️  IMPORTANT — READ BEFORE CLICKING NEXT IN THE INSTALLER  ${NC}"
+    echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}  When the installer asks for an installation directory, set it to:${NC}"
+    echo -e ""
+    echo -e "${GREEN}        /opt/Xilinx${NC}"
+    echo -e ""
+    echo -e "${YELLOW}  Do NOT use /opt  — this breaks internal JVM classpaths.${NC}"
+    echo -e "${YELLOW}  Do NOT move the installation after it completes.${NC}"
+    echo -e "${RED}══════════════════════════════════════════════════════════════${NC}\n"
+
+    read -rp "Press ENTER to open the installer when you are ready... "
+
     INSTALLER_TO_RUN=""
     INSTALLER_TYPE=""
 
@@ -137,67 +160,60 @@ else
         fi
     fi
 
-    # ── Launch ────────────────────────────────────────────────────────────────
     chmod 755 "${INSTALLER_TO_RUN}"
 
     if [[ "$INSTALLER_TYPE" == "xsetup" ]]; then
-        info "Launching offline installer (xsetup) as root — installing to ${XILINX_ROOT}"
-        info "(The installer GUI will open — follow the on-screen wizard.)"
+        info "Launching offline installer (xsetup) as root — install to: ${XILINX_ROOT}"
         cd "$(dirname "${INSTALLER_TO_RUN}")"
         ./xsetup
         cd - > /dev/null
     else
-        info "Launching .bin installer as root — installing to ${XILINX_ROOT}"
-        info "(The installer GUI will open — follow the on-screen wizard.)"
+        info "Launching .bin installer as root — install to: ${XILINX_ROOT}"
         "${INSTALLER_TO_RUN}"
     fi
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 2 : Relocate install directories into /opt/Xilinx/ if needed
+# STEP 2 : Move companion directories into /opt/Xilinx/ if needed
 #
-#  The Xilinx installer creates these under whatever root it ran as:
-#    2025.2/       ← versioned dir (contains Vivado, Vitis, etc.)
-#    DocNav/       ← documentation browser
-#    xic/          ← Xilinx information centre
-#    .xinstall/    ← installer metadata
+#  If the installer was pointed at /opt/ instead of /opt/Xilinx/, the
+#  companion directories (DocNav, xic, .xinstall) will land under /opt/.
+#  We move ONLY these directories — no files inside them are touched.
 #
-#  All of these need to end up under /opt/Xilinx/.
-#  OLD_INSTALL_PREFIX tracks where they came from, used in Step 3 to fix paths.
+#  ⚠️  The main version directory (2025.2/) is NOT moved here.
+#      If it landed under /opt/2025.2 instead of /opt/Xilinx/2025.2,
+#      you must REINSTALL — do not move it, as internal paths are baked in.
 # ─────────────────────────────────────────────────────────────────────────────
-section "STEP 2: Relocating to /opt/Xilinx/"
+section "STEP 2: Checking Companion Directory Locations"
 
-OLD_INSTALL_PREFIX=""   # will be set below if a move is needed
-
-if [[ -d "${XILINX_VER_ROOT}" ]]; then
-    info "Version directory already at correct location: ${XILINX_VER_ROOT}"
-    # Still move companion dirs if they're loose under /opt
-    OLD_INSTALL_PREFIX="/opt"
-else
-    info "${XILINX_VER_ROOT} not present — checking /opt/ for installer output ..."
-
-    if [[ -d "/opt/${XILINX_VERSION}" ]]; then
-        OLD_INSTALL_PREFIX="/opt"
-        mkdir -p "${XILINX_ROOT}"
-
-        # Move the versioned dir (e.g. 2025.2 → /opt/Xilinx/2025.2)
-        info "Moving /opt/${XILINX_VERSION} → ${XILINX_VER_ROOT}"
-        mv "/opt/${XILINX_VERSION}" "${XILINX_VER_ROOT}"
-    else
-        error "Cannot find /opt/${XILINX_VERSION} or ${XILINX_VER_ROOT}.\n  Verify the installer completed successfully, then check /opt/ manually."
-    fi
+# Verify the main version directory is in the right place before continuing
+if [[ ! -d "${XILINX_VER_ROOT}" ]]; then
+    echo -e "\n${RED}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${RED}  ✗  Installation not found at: ${XILINX_VER_ROOT}${NC}"
+    echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}  If the installer ran to /opt/ instead of /opt/Xilinx/:${NC}"
+    echo -e "${YELLOW}  → You must reinstall. Moving Vivado after install breaks it.${NC}"
+    echo -e ""
+    echo -e "${YELLOW}  Clean up and reinstall:${NC}"
+    echo -e "    sudo rm -rf /opt/${XILINX_VERSION} /opt/DocNav /opt/xic /opt/.xinstall"
+    echo -e "    sudo rm -rf ${XILINX_ROOT}"
+    echo -e "    sudo bash $0"
+    echo -e "${RED}══════════════════════════════════════════════════════════════${NC}\n"
+    exit 1
 fi
 
-# Move companion directories (DocNav, xic, .xinstall) if still under /opt/
+info "Main installation confirmed at: ${XILINX_VER_ROOT}"
+
+# Move companion directories only — these are safe to relocate (no baked-in paths)
 mkdir -p "${XILINX_ROOT}"
 for dir in "DocNav" "xic" ".xinstall"; do
     if [[ -d "/opt/${dir}" ]]; then
-        info "Moving /opt/${dir} → ${XILINX_ROOT}/${dir}"
+        info "Moving companion dir: /opt/${dir} → ${XILINX_ROOT}/${dir}"
         mv "/opt/${dir}" "${XILINX_ROOT}/${dir}"
     elif [[ -d "${XILINX_ROOT}/${dir}" ]]; then
-        info "${dir} already under ${XILINX_ROOT}/ — OK"
+        info "${dir} already at ${XILINX_ROOT}/${dir} — OK"
     else
-        warn "${dir} not found under /opt/ or ${XILINX_ROOT}/ — skipping."
+        warn "${dir} not found — may not have been installed."
     fi
 done
 
@@ -205,77 +221,9 @@ info "Final layout under ${XILINX_ROOT}/:"
 ls "${XILINX_ROOT}/"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 3 : Patch all settings64.sh files — fix every hardcoded path
-#
-#  Each settings64.sh sources several hidden .settings64-*.sh files using
-#  absolute paths baked in at install time. Because the installer ran to /opt/
-#  instead of /opt/Xilinx/, every one of these source lines is broken:
-#
-#    source /opt/2025.2/Vivado/.settings64-Vivado.sh     ← wrong
-#    source /opt/DocNav/.settings64-DocNav.sh             ← wrong
-#    source /opt/xic/...                                  ← wrong
-#
-#  We fix all three prefixes in every settings file:
-#    /opt/2025.2  →  /opt/Xilinx/2025.2
-#    /opt/DocNav  →  /opt/Xilinx/DocNav
-#    /opt/xic     →  /opt/Xilinx/xic
-#  Plus the build-time default just in case:
-#    /tools/Xilinx  →  /opt/Xilinx
+# STEP 3 : Write .bashrc entries for the student user
 # ─────────────────────────────────────────────────────────────────────────────
-section "STEP 3: Patching settings64.sh Files"
-
-# Collect every settings64.sh under the version root (catches all tools)
-mapfile -t SETTINGS_FILES < <(find "${XILINX_VER_ROOT}" -name "settings64.sh" -type f 2>/dev/null)
-
-if [[ ${#SETTINGS_FILES[@]} -eq 0 ]]; then
-    warn "No settings64.sh files found under ${XILINX_VER_ROOT} — skipping patch step."
-else
-    for f in "${SETTINGS_FILES[@]}"; do
-        info "Patching: $f"
-        CHANGED=false
-
-        # /opt/VERSION  →  /opt/Xilinx/VERSION  (main tool paths)
-        if grep -q "/opt/${XILINX_VERSION}" "$f"; then
-            sed -i "s|/opt/${XILINX_VERSION}|${XILINX_VER_ROOT}|g" "$f"
-            info "  /opt/${XILINX_VERSION} → ${XILINX_VER_ROOT}"
-            CHANGED=true
-        fi
-
-        # /opt/DocNav  →  /opt/Xilinx/DocNav
-        if grep -q "/opt/DocNav" "$f"; then
-            sed -i "s|/opt/DocNav|${XILINX_ROOT}/DocNav|g" "$f"
-            info "  /opt/DocNav → ${XILINX_ROOT}/DocNav"
-            CHANGED=true
-        fi
-
-        # /opt/xic  →  /opt/Xilinx/xic
-        if grep -q "/opt/xic" "$f"; then
-            sed -i "s|/opt/xic|${XILINX_ROOT}/xic|g" "$f"
-            info "  /opt/xic → ${XILINX_ROOT}/xic"
-            CHANGED=true
-        fi
-
-        # /tools/Xilinx  →  /opt/Xilinx  (Xilinx build-time default fallback)
-        if grep -q "/tools/Xilinx" "$f"; then
-            sed -i 's|/tools/Xilinx|/opt/Xilinx|g' "$f"
-            info "  /tools/Xilinx → /opt/Xilinx"
-            CHANGED=true
-        fi
-
-        [[ "$CHANGED" == false ]] && info "  Already correct — no changes needed."
-
-        # Print all source lines so you can verify at a glance
-        info "  Source lines after patch:"
-        grep "^source" "$f" 2>/dev/null | while read -r line; do
-            info "    $line"
-        done
-    done
-fi
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 4 : Write .bashrc entries for the student user
-# ─────────────────────────────────────────────────────────────────────────────
-section "STEP 4: Configuring Student .bashrc"
+section "STEP 3: Configuring Student .bashrc"
 
 [[ -f "$BASHRC" ]] || error ".bashrc not found for user $STUDENT_USER at $BASHRC"
 
@@ -332,7 +280,7 @@ fi
 #  The .desktop files also contain hardcoded /opt/VERSION paths in their
 #  Exec= and Icon= lines — those are patched here too.
 # ─────────────────────────────────────────────────────────────────────────────
-section "STEP 5: Installing .desktop Shortcuts"
+section "STEP 4: Installing .desktop Shortcuts"
 
 ROOT_DESKTOP="/root/Desktop"
 STUDENT_DESKTOP="${STUDENT_HOME}/Desktop"
@@ -407,7 +355,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 6 : Install USB Cable Drivers
 # ─────────────────────────────────────────────────────────────────────────────
-section "STEP 6: Installing Xilinx USB Cable Drivers"
+section "STEP 5: Installing Xilinx USB Cable Drivers"
 
 DRIVER_SCRIPT="${XILINX_VER_ROOT}/data/xicom/cable_drivers/lin64/install_script/install_drivers/install_drivers"
 
