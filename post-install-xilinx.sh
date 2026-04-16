@@ -28,12 +28,12 @@ echo -e "${GREEN}  XILINX POST-INSTALL SETUP${NC}"
 echo -e "${GREEN}══════════════════════════════════════════${NC}\n"
 
 while true; do
-    read -rp "  Enter machine number (e.g. 01, 09, 30): " MACHINE_NUMBER
-    # Must be 2 digits
-    if [[ "$MACHINE_NUMBER" =~ ^[0-9]{2}$ ]]; then
+    read -rp "  Enter machine number (1–20): " MACHINE_NUMBER
+
+    if [[ "$MACHINE_NUMBER" =~ ^[0-9]{1,2}$ ]] && ((10#$MACHINE_NUMBER >= 1 && 10#$MACHINE_NUMBER <= 20)); then
         break
     else
-        echo -e "  ${RED}Invalid — enter exactly two digits (e.g. 01, 09).${NC}"
+        echo -e "  ${RED}Invalid — enter a number between 1 and 20.${NC}"
     fi
 done
 
